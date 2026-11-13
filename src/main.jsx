@@ -25,7 +25,34 @@ const DEFAULT_QUOTES=[
  '내가 네 상황을 100% 알 수는 없어ㅠㅠ',
  'OO이는 편하게 해주니까.'
 ];
-const STORE='grae-grae-potato-quotes-v2'; // 새 기본 문구를 적용하기 위한 저장소 버전
+// ── 문구 저장소 ─────────────────────────────────────────────────────────
+// v3 형식: {base:[저장 당시의 기본 문구], quotes:[사용자가 저장한 문구]}
+// DEFAULT_QUOTES만 고치면 됨(버전 숫자를 따로 올릴 필요 없음). 불러올 때 base와 현재 기본 문구를 비교해
+// 기본 문구가 바뀌었으면 새 기본 문구를 적용하고, 사용자가 직접 추가한 문구/직접 지운 문구는 그대로 반영함.
+const STORE='grae-grae-potato-quotes-v3';
+const LEGACY_STORE='grae-grae-potato-quotes-v2'; // 예전 형식(문구 배열만 저장)
+const LEGACY_DEFAULTS=['그래그래~ 너 말 맞아','어 그래, 진샘이 성숙해~','솔직히 네가 더 아까웠어ㅋㅋ','그런 거 영적 공격일 수도 있어~?','그래그래!!','내가 네 상황을 100% 알 수는 없어ㅠㅠ','OO이는 편하게 해주니까.'];
+const isList=a=>Array.isArray(a)&&a.every(x=>typeof x==='string');
+const same=(a,b)=>a.length===b.length&&a.every((x,i)=>x===b[i]);
+// 3-way 병합: 새 기본 문구 − 사용자가 지운 것 + 사용자가 추가한 것
+function mergeQuotes(base,saved,defaults){
+ const added=saved.filter(q=>!base.includes(q)),removed=base.filter(q=>!saved.includes(q));
+ const out=[...defaults.filter(q=>!removed.includes(q)),...added.filter(q=>!defaults.includes(q))];
+ return out.length?out:[...defaults];
+}
+const storage={get:k=>{try{return JSON.parse(localStorage.getItem(k))}catch{return null}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},del:k=>{try{localStorage.removeItem(k)}catch{}}};
+function loadQuotes(){
+ let rec=storage.get(STORE);
+ if(!(rec&&isList(rec.base)&&isList(rec.quotes))){ // v3 기록이 없으면 예전(v2) 기록을 옮겨옴
+  const legacy=storage.get(LEGACY_STORE);storage.del(LEGACY_STORE);
+  rec=isList(legacy)&&legacy.length?{base:LEGACY_DEFAULTS,quotes:legacy}:null;
+ }
+ if(!rec||!rec.quotes.length){storage.del(STORE);return {quotes:DEFAULT_QUOTES,custom:false}}
+ const quotes=same(rec.base,DEFAULT_QUOTES)?rec.quotes:mergeQuotes(rec.base,rec.quotes,DEFAULT_QUOTES);
+ if(same(quotes,DEFAULT_QUOTES)){storage.del(STORE);return {quotes:DEFAULT_QUOTES,custom:false}} // 직접 편집한 내용이 없으면 저장하지 않음
+ storage.set(STORE,{base:DEFAULT_QUOTES,quotes});
+ return {quotes,custom:true};
+}
 const CAM_Z=13,Z_FAR=-3,Z_NEAR=2.2;
 const rand=(a,b)=>a+Math.random()*(b-a);
 // u,v: 화면 안 위치(0~1). 지정하지 않으면 완전 랜덤(ADD CHAOS용)
@@ -89,14 +116,16 @@ function App(){
  const [width,setWidth]=useState(window.innerWidth);
  const [heads,setHeads]=useState(()=>makeCrowd(countForWidth(window.innerWidth)));
  const [reduce,setReduce]=useState(()=>window.matchMedia?.('(prefers-reduced-motion: reduce)').matches||false);
- const [quotes,setQuotes]=useState(()=>{try{const a=JSON.parse(localStorage.getItem(STORE));return Array.isArray(a)&&a.length?a:DEFAULT_QUOTES}catch{return DEFAULT_QUOTES}});
+ const [initial]=useState(loadQuotes);
+ const [quotes,setQuotes]=useState(initial.quotes),[custom,setCustom]=useState(initial.custom);
  const [editor,setEditor]=useState(false),[draft,setDraft]=useState(''),[selected,setSelected]=useState(null),[last,setLast]=useState(-1);
  const [bubble,setBubble]=useState(false);
  useEffect(()=>{const fn=()=>setWidth(window.innerWidth);window.addEventListener('resize',fn);return()=>window.removeEventListener('resize',fn)},[]);
  useEffect(()=>{const id=setInterval(()=>{if(!reduce)setBubble(b=>!b)},4200);return()=>clearInterval(id)},[reduce]);
  useEffect(()=>{const esc=e=>{if(e.key==='Escape'){setSelected(null);setEditor(false)}};window.addEventListener('keydown',esc);return()=>window.removeEventListener('keydown',esc)},[]);
  const pick=()=>{let n=Math.floor(Math.random()*quotes.length);if(quotes.length>1&&n===last)n=(n+1+Math.floor(Math.random()*(quotes.length-1)))%quotes.length;setLast(n);setSelected({quote:quotes[n],index:n})};
- const save=()=>{const a=draft.split('\n').map(x=>x.trim()).filter(Boolean).slice(0,500);if(!a.length)return;setQuotes(a);localStorage.setItem(STORE,JSON.stringify(a));setEditor(false)};
+ const save=()=>{const a=draft.split('\n').map(x=>x.trim()).filter(Boolean).slice(0,500);if(!a.length)return;const c=!same(a,DEFAULT_QUOTES);setQuotes(a);setCustom(c);setLast(-1);if(c)storage.set(STORE,{base:DEFAULT_QUOTES,quotes:a});else storage.del(STORE);setEditor(false)};
+ const resetQuotes=()=>{if(custom&&!window.confirm('직접 편집한 문구를 지우고 기본 문구로 되돌릴까?'))return;storage.del(STORE);storage.del(LEGACY_STORE);setQuotes(DEFAULT_QUOTES);setCustom(false);setLast(-1);setDraft(DEFAULT_QUOTES.join('\n'))};
  const exportJson=()=>{const blob=new Blob([JSON.stringify(quotes,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='grae-quotes.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
  const importJson=async(e)=>{const f=e.target.files?.[0];if(!f)return;try{const v=JSON.parse(await f.text());if(!Array.isArray(v)||!v.every(x=>typeof x==='string'))throw Error();setDraft(v.join('\n'))}catch{alert('문자열 배열 형태의 JSON 파일을 선택해 줘.')}e.target.value=''};
  return <main className="app">
@@ -105,7 +134,7 @@ function App(){
   <nav className="controls"><button onClick={()=>setHeads(h=>[...h,...Array.from({length:Math.min(10,150-h.length)},(_,i)=>makeHead(i+h.length))])} disabled={heads.length>=150}>+ ADD CHAOS</button><button onClick={()=>setHeads(makeCrowd(countForWidth(width)))}>RESET</button><button onClick={()=>{setDraft(quotes.join('\n'));setEditor(true)}}>EDIT QUOTES</button><label className="motion"><input type="checkbox" checked={reduce} onChange={e=>setReduce(e.target.checked)}/> 움직임 줄이기</label></nav>
   <footer>4 ANGLES · 2.5D PHOTO CUTOUT COLLAGE · NO UPLOADS</footer>
   {selected&&<div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setSelected(null)}}><article className="dialog quote" role="dialog" aria-modal="true" aria-label="랜덤 문구"><button className="close" onClick={()=>setSelected(null)}>✕</button><div className="eyebrow">RANDOM QUOTE #{String(selected.index+1).padStart(2,'0')}</div><p>{selected.quote}</p><button onClick={pick}>ANOTHER QUOTE ↻</button></article></div>}
-  {editor&&<div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setEditor(false)}}><article className="dialog edit" role="dialog" aria-modal="true" aria-label="문구 편집"><button className="close" onClick={()=>setEditor(false)}>✕</button><h2>EDIT QUOTES</h2><p className="hint">한 줄에 하나씩 입력해. 기본 문구는 PDF에 기록된 기억 기반 표현이야(정확한 녹취 아님). 내용은 이 브라우저에만 저장돼.</p><textarea value={draft} onChange={e=>setDraft(e.target.value)} spellCheck={false}/><div className="editbuttons"><button onClick={save}>SAVE</button><button onClick={exportJson}>EXPORT JSON</button><label className="import">IMPORT JSON<input type="file" accept="application/json,.json" onChange={importJson} hidden/></label></div></article></div>}
+  {editor&&<div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setEditor(false)}}><article className="dialog edit" role="dialog" aria-modal="true" aria-label="문구 편집"><button className="close" onClick={()=>setEditor(false)}>✕</button><h2>EDIT QUOTES</h2><p className="hint">한 줄에 하나씩 입력해. 기본 문구는 PDF에 기록된 기억 기반 표현이야(정확한 녹취 아님). 내용은 이 브라우저에만 저장돼. <span className="state">{custom?'현재: 직접 편집한 문구 사용 중':'현재: 기본 문구 사용 중'}</span></p><textarea value={draft} onChange={e=>setDraft(e.target.value)} spellCheck={false}/><div className="editbuttons"><button onClick={save}>SAVE</button><button onClick={exportJson}>EXPORT JSON</button><button className="ghost" onClick={resetQuotes}>기본 문구로 초기화</button><label className="import">IMPORT JSON<input type="file" accept="application/json,.json" onChange={importJson} hidden/></label></div></article></div>}
  </main>
 }
 
